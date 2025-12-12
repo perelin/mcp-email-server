@@ -5,7 +5,13 @@ import pytest
 
 from mcp_email_server.config import EmailServer, EmailSettings
 from mcp_email_server.emails.classic import ClassicEmailHandler, EmailClient
-from mcp_email_server.emails.models import AttachmentDownloadResponse, EmailMetadata, EmailMetadataPageResponse
+from mcp_email_server.emails.models import (
+    AttachmentDownloadResponse,
+    EmailBodyResponse,
+    EmailContentBatchResponse,
+    EmailMetadata,
+    EmailMetadataPageResponse,
+)
 
 
 @pytest.fixture
@@ -168,6 +174,8 @@ class TestClassicEmailHandler:
                 ["bcc@example.com"],
                 False,
                 None,
+                None,
+                None,
             )
 
     @pytest.mark.asyncio
@@ -199,6 +207,8 @@ class TestClassicEmailHandler:
                 None,
                 False,
                 [str(test_file)],
+                None,
+                None,
             )
 
     @pytest.mark.asyncio
@@ -276,3 +286,63 @@ class TestClassicEmailHandler:
             assert result.saved_path == save_path
 
             mock_download.assert_called_once_with("123", "document.pdf", save_path)
+
+    @pytest.mark.asyncio
+    async def test_send_email_with_reply_headers(self, classic_handler):
+        """Test sending email with reply headers."""
+        mock_smtp = AsyncMock()
+        mock_smtp.__aenter__.return_value = mock_smtp
+        mock_smtp.__aexit__.return_value = None
+        mock_smtp.login = AsyncMock()
+        mock_smtp.send_message = AsyncMock()
+
+        with patch("aiosmtplib.SMTP", return_value=mock_smtp):
+            await classic_handler.send_email(
+                recipients=["recipient@example.com"],
+                subject="Re: Test",
+                body="Reply body",
+                in_reply_to="<original@example.com>",
+                references="<original@example.com>",
+            )
+
+            call_args = mock_smtp.send_message.call_args
+            msg = call_args[0][0]
+            assert msg["In-Reply-To"] == "<original@example.com>"
+            assert msg["References"] == "<original@example.com>"
+
+    @pytest.mark.asyncio
+    async def test_get_emails_content_includes_message_id(self, classic_handler):
+        """Test that get_emails_content returns message_id from parsed email data."""
+        now = datetime.now(timezone.utc)
+        email_data = {
+            "email_id": "123",
+            "message_id": "<test-message-id@example.com>",
+            "subject": "Test Subject",
+            "from": "sender@example.com",
+            "to": ["recipient@example.com"],
+            "date": now,
+            "body": "Test email body",
+            "attachments": [],
+        }
+
+        # Mock the get_email_body_by_id method to return our test data
+        mock_get_body = AsyncMock(return_value=email_data)
+
+        with patch.object(classic_handler.incoming_client, "get_email_body_by_id", mock_get_body):
+            result = await classic_handler.get_emails_content(
+                email_ids=["123"],
+                mailbox="INBOX",
+            )
+
+            # Verify the result
+            assert isinstance(result, EmailContentBatchResponse)
+            assert len(result.emails) == 1
+            assert isinstance(result.emails[0], EmailBodyResponse)
+            assert result.emails[0].email_id == "123"
+            assert result.emails[0].message_id == "<test-message-id@example.com>"
+            assert result.emails[0].subject == "Test Subject"
+            assert result.emails[0].sender == "sender@example.com"
+            assert result.emails[0].body == "Test email body"
+
+            # Verify the client method was called correctly
+            mock_get_body.assert_called_once_with("123", "INBOX")

@@ -46,6 +46,9 @@ class EmailClient:
         sender = email_message.get("From", "")
         date_str = email_message.get("Date", "")
 
+        # Extract Message-ID for reply threading
+        message_id = email_message.get("Message-ID")
+
         # Extract recipients
         to_addresses = []
         to_header = email_message.get("To", "")
@@ -106,6 +109,7 @@ class EmailClient:
             body = body[:20000] + "...[TRUNCATED]"
         return {
             "email_id": email_id or "",
+            "message_id": message_id,
             "subject": subject,
             "from": sender,
             "to": to_addresses,
@@ -528,6 +532,8 @@ class EmailClient:
         bcc: list[str] | None = None,
         html: bool = False,
         attachments: list[str] | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
     ):
         # Create message with or without attachments
         if attachments:
@@ -553,6 +559,12 @@ class EmailClient:
         # Add CC header if provided (visible to recipients)
         if cc:
             msg["Cc"] = ", ".join(cc)
+
+        # Set threading headers for replies
+        if in_reply_to:
+            msg["In-Reply-To"] = in_reply_to
+        if references:
+            msg["References"] = references
 
         # Note: BCC recipients are not added to headers (they remain hidden)
         # but will be included in the actual recipients for SMTP delivery
@@ -742,6 +754,7 @@ class ClassicEmailHandler(EmailHandler):
                     emails.append(
                         EmailBodyResponse(
                             email_id=email_data["email_id"],
+                            message_id=email_data.get("message_id"),
                             subject=email_data["subject"],
                             sender=email_data["from"],
                             recipients=email_data["to"],
@@ -772,8 +785,12 @@ class ClassicEmailHandler(EmailHandler):
         bcc: list[str] | None = None,
         html: bool = False,
         attachments: list[str] | None = None,
+        in_reply_to: str | None = None,
+        references: str | None = None,
     ) -> None:
-        msg = await self.outgoing_client.send_email(recipients, subject, body, cc, bcc, html, attachments)
+        msg = await self.outgoing_client.send_email(
+            recipients, subject, body, cc, bcc, html, attachments, in_reply_to, references
+        )
 
         # Save to Sent folder if enabled
         if self.save_to_sent and msg:
